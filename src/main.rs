@@ -1,4 +1,4 @@
-use std::io::{Read, Write as _};
+use std::io::{ErrorKind, Write as _};
 use crossterm::style::{Color, Print, StyledContent, Stylize};
 use crossterm::{ExecutableCommand, execute};
 use crossterm::cursor::{MoveToColumn};
@@ -6,11 +6,11 @@ use crossterm::style::Color::{Reset};
 use crossterm::terminal::{Clear};
 use crossterm::terminal::ClearType::CurrentLine;
 
-use russh::{server::{Auth, Session}, ChannelId, server, Channel, CryptoVec};
-use std::{sync::Arc};
+use russh::{server::{Auth, Session}, ChannelId, server, Channel};
 use std::collections::{HashMap};
 use std::fmt::Display;
-use std::fs::{File, OpenOptions};
+use std::io::ErrorKind::NotFound;
+use tokio::fs::{File, OpenOptions};
 use tokio::sync::Mutex;
 use async_trait::async_trait;
 use russh::server::Msg;
@@ -18,12 +18,22 @@ use russh::server::Server as _;
 use russh::server::Handle;
 use tokio::task::JoinHandle;
 use std::str;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::mpsc::{Sender, Receiver, UnboundedSender, UnboundedReceiver, unbounded_channel};
 use crate::AsciiCode::{Backspace, Char, Enter};
+use crate::TerminalHandleMsg::{Data, Flush};
 
-type SSHClient = (Sender<AsciiCode>, JoinHandle<()>);
+struct SSHClient(Sender<AsciiCode>, JoinHandle<()>);
+
+impl Drop for SSHClient {
+    fn drop(&mut self) {
+        let SSHClient(_, handle) = self;
+        handle.abort();
+    }
+}
 
 #[derive(Clone)]
 struct Server {
@@ -31,11 +41,42 @@ struct Server {
     id: usize,
 }
 
-#[derive(Clone)]
 struct TerminalHandle {
-    handle: Handle,
-    sink: Vec<u8>,
-    channel_id: ChannelId,
+    sender: UnboundedSender<TerminalHandleMsg>,
+    _worker: JoinHandle<()> // auto-exited when sender is dropped
+}
+
+enum TerminalHandleMsg {
+    Flush,
+    Data(Vec<u8>)
+}
+
+impl TerminalHandle {
+    fn new(handle: Handle, channel_id: ChannelId) -> Self {
+        let (send, recv) = unbounded_channel::<TerminalHandleMsg>();
+        let sink = Vec::new();
+        Self {
+            sender: send,
+            _worker: tokio::spawn(Self::worker(sink, recv, handle, channel_id)),
+        }
+    }
+    
+    async fn worker(mut sink: Vec<u8>, mut recv: UnboundedReceiver<TerminalHandleMsg>, handle: Handle, channel_id: ChannelId) {
+        while let Some(msg) = recv.recv().await {
+            let sink = &mut sink;
+            match msg {
+                Data(c) => {
+                    sink.extend_from_slice(c.as_slice());
+                }
+                Flush => {
+                    let data = sink.clone().into(); 
+                    handle.data(channel_id, data).await.unwrap();
+                    sink.clear(); 
+                }
+            }
+
+        }
+    }
 }
 
 impl std::io::Write for TerminalHandle {
@@ -44,25 +85,15 @@ impl std::io::Write for TerminalHandle {
 
         let buf = String::from_utf8_lossy(buf);
         let buf = buf.replace('\n', "\r\n");
-        let buf = buf.as_bytes();
-
-        self.sink.extend_from_slice(buf);
+        
+        self.sender.send(Data(Vec::from(buf))).unwrap();
 
         Ok(original_length)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let handle = self.handle.clone();
-        let channel_id = self.channel_id;
-        let data: CryptoVec = self.sink.clone().into();
-        let result = futures::executor::block_on(handle.data(channel_id, data));
-        if result.is_err() {
-            eprintln!("Failed to send data: {:?}", result);
-        }
-
-        self.sink.clear();
-
-        Ok(())
+        self.sender.send(Flush)
+            .map_err(|_| std::io::Error::new(ErrorKind::Other, "Send Error")) 
     }
 }
 
@@ -95,8 +126,7 @@ impl server::Handler for Server {
 
     async fn channel_close(&mut self, _channel: ChannelId, _session: &mut Session) -> Result<(), Self::Error> {
         let mut clients = self.clients.lock().await;
-        let (_, handle) = clients.remove(&self.id).expect("key to exist");
-        handle.abort();
+        clients.remove(&self.id).expect("key to exist");
         Ok(())
     }
 
@@ -106,18 +136,14 @@ impl server::Handler for Server {
         session: &mut Session,
     ) -> Result<bool, Self::Error> {
         let mut clients = self.clients.lock().await;
-        let mut terminal_handle = TerminalHandle {
-            handle: session.handle(),
-            sink: Vec::new(),
-            channel_id: channel.id(),
-        };
+        let mut terminal_handle = TerminalHandle::new(session.handle(), channel.id()); 
 
-        terminal_handle.flush()?;
+        terminal_handle.flush()?; 
 
         let (tx, rx) = mpsc::channel::<AsciiCode>(1);
 
         clients.insert(self.id,
-                       (tx,
+                       SSHClient(tx,
                         tokio::spawn(async move {
                             YSWSForm { out: terminal_handle, input: rx }.run().await.unwrap();
                             channel.eof().await.unwrap();
@@ -135,7 +161,7 @@ impl server::Handler for Server {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let clients = self.clients.lock().await;
-        let (sender, _) = clients.get(&self.id).expect("client to exist");
+        let SSHClient(sender, _) = clients.get(&self.id).expect("client to exist");
 
         let mut i = 0;
         while i < data.len() {
@@ -182,8 +208,8 @@ impl server::Handler for Server {
 #[tokio::main]
 async fn main() {
     let mut key = String::new();
-    let mut file = File::open("ssh_key").unwrap();
-    file.read_to_string(&mut key).unwrap();
+    let mut file = File::open("ssh_key").await.unwrap();
+    file.read_to_string(&mut key).await.unwrap();
     let key = russh_keys::decode_secret_key(&key, None).unwrap();
 
     let config = server::Config {
@@ -331,9 +357,12 @@ impl YSWSForm {
 
         println!("{}", data);
 
-        let mut file = OpenOptions::new().append(true).open("responses.txt")
-            .unwrap_or_else(|_| File::create_new("responses.txt").expect("opening file to work"));
-        file.write_all(data.to_string().as_bytes())?;
+        let mut file = match OpenOptions::new().append(true).open("responses.txt").await {
+            Ok(file) => file,
+            Err(err) if err.kind() == NotFound => File::create_new("responses.txt").await.expect("opening file to work"),
+            other => other.unwrap() 
+        };
+        file.write_all(data.to_string().as_bytes()).await?;
 
         Ok(())
     }
