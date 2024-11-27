@@ -73,8 +73,6 @@ async fn main() {
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
                 .spawn().expect("TODO").wait().await.unwrap();
-
-            println!("{}", path.display())
         }
         _ => {
             let mut app = make_terminal_app().await;
