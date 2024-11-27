@@ -9,7 +9,7 @@ use crossterm::style::Color::Reset;
 use std::io::{ErrorKind, Write};
 use std::marker::PhantomData;
 use std::time::Duration;
-use crossterm::terminal::{Clear, SetTitle};
+use crossterm::terminal::{Clear, DisableLineWrap, EnableLineWrap, SetTitle};
 use crossterm::terminal::ClearType::{CurrentLine, FromCursorDown};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -311,6 +311,8 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
         
         // this lambda is extremely cursed but it works. i don't know how or why
         let mut render = |index: usize, first_time: bool| -> std::io::Result<()> {
+            self.out.execute(DisableLineWrap)?;
+            
             let mut buffer = String::new();
             for (i, option) in options.iter().enumerate() {
                 let element = format!("{}{}\r\n",
@@ -346,6 +348,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
 
             self.out.queue(Print(buffer))?;
             self.out.queue(MoveToColumn(1))?;
+            self.out.queue(EnableLineWrap)?;
             self.out.flush()?;
             Ok(())
         };
