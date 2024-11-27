@@ -67,7 +67,7 @@ pub struct SubmissionsAirtableBase {
 
 const BASE_ID: &str = "appLSCQFAClFemq86";
 const TABLE_NAME: &str = "GA";
-const VIEW_NAME: &str = "Grid view";
+const VIEW_NAME: &str = "Approved";
 
 // struct taken from the airtable-api crate
 #[derive(Debug, Clone, Serialize, Deserialize)]
