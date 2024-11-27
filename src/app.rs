@@ -1,4 +1,3 @@
-use std::cmp::{min};
 use std::fmt::{Display, Formatter};
 use tokio::sync::mpsc::{Receiver, unbounded_channel, UnboundedReceiver, UnboundedSender};
 use crossterm::style::{Color, Print, StyledContent, Stylize};
@@ -16,7 +15,8 @@ use tokio::time::timeout;
 use crate::{SharedTerminalParams, TerminalCode};
 use crate::AsciiCode::{ArrowDown, ArrowUp, Backspace, Char, Enter, EoT};
 use crate::database::{FormData, SubmissionsAirtableBase};
-use MenuOptions::{_JoinSlack, Gallery, HowToStart, Submit, WhatIsThis};
+use MenuOptions::{Gallery, Submit};
+use crate::app::MenuOptions::Info;
 use crate::app::TerminalHandleMsg::{Data, Flush};
 use crate::ssh_client::SSHForwardingSession;
 
@@ -87,20 +87,16 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
 
 #[derive(Clone)]
 enum MenuOptions {
-    WhatIsThis,
-    HowToStart,
+    Info,
     Submit,
-    _JoinSlack,
     Gallery
 }
 
 impl Display for MenuOptions {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", match self {
-            WhatIsThis => "What is this?",
-            HowToStart => "How to start",
+            Info => "What is this?\r\n  (+ resources & criteria)",
             Submit => "Submit your project",
-            _JoinSlack => "Join us!",
             Gallery => "See the gallery"
         })
     }
@@ -127,28 +123,30 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
         self.newline()?;
         self.println(Self::text_box("Welcome to the Cargo Cult!".white().bold(), Color::DarkRed, 1, 3, 2))?;
 
-        let options = &[WhatIsThis, HowToStart, Gallery, Submit];
+        let options = &[Info, Gallery, Submit];
         loop {
             match options[self.single_select(options).await?] {
-                WhatIsThis => {
-                    self.println(format!("Running a little experiment- {} by building command-line apps - we'll start with the Rust Book (chapters 1-12),\
-                    and if you publish your app to crates.io {} (11/10), I'll send you a physical copy of the book!\r\n\r\n\
-                    I'll be online in #rust all day for the rest of the week to help out, and once your offering is ready, ssh cargo-cult.hackclub.com to submit! The only \
-                    criteria is that you make something unique and useful to you.",
-                                         "have you ever wanted to learn Rust? This week, let's learn together".bold(),
-                                         "by this Sunday night".bold()
-                    ))?;
-                },
-                HowToStart => {
-                    self.println("I'd start with the Rust Book (https://doc.rust-lang.org/book/), chapters \
-                        1-12! It'll introduce you to the language and show you the constructs you need to make a CLI app.\r\n\r\n\
-                        If you're looking to go further (highly recommend if you already know Rust!), I'd recommend taking a look \
-                        at some crates built for making CLIs- Clap is great for argument parsing, Crossterm is great for manipulating \
-                        the terminal, and Ratatui is great for building out fully-featured TUIs".to_string())?;
-                },
-                _JoinSlack => {
-                    self.println("Join the Hack Club Slack (hackclub.com/slack), and head to the #rust channel to talk to other teenagers \
-                    making apps in Rust!".to_string())?;
+                Info => {
+                    // TODO: formatting and copy pass
+                    self.println("\
+                    Rust is my favorite language- it's used in Firefox, Windows NT, and Discord, and known for \
+                    its safety features and efficiency.\r\nIt's also known for having a steep learning curve- let's \
+                    climb it together by building our own command-line apps!\r\n\r\n\
+                    We'll start with the Rust Book (doc.rust-lang.org/book) (chapters 1-12), \
+                    and if you publish your app to crates.io\r\nby New Year's, I'll \
+                    send you a physical copy of the book! If you already submitted a project during the \
+                    beta period,\r\nship a new feature to get new Orpheus x Ferris stickers designed by @acon!\r\n\r\n\
+                    Already know Rust? Take a look at some libraries to make more advanced apps - \
+                    Clap is great for argument parsing,\r\nCrossterm is great for manipulating \
+                    the terminal, and Ratatui is great for building out fully-featured TUIs.\r\n\r\n\
+                    Here's the criteria to get a book: \r\n\
+                    - Your app must have a help page & readme\r\n\
+                    - Your app must be published to crates.io\r\n\
+                    - Your app must be runnable by me (in Linux/Docker)\r\n\
+                    - Your app must be useful OR entertaining\r\n\
+                    - Your app must be unique (no to-do lists!)\r\n\
+                    - You should push yourself! If you already know Rust, spend the time to make something really cool.\r\n\r\n\
+                    - Cheru (@cheru on Slack)")?;
                 },
                 Gallery => return self.gallery().await,
                 Submit => return self.submission_form().await
