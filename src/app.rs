@@ -192,7 +192,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
         let username = self.params.lock().await.username.clone();
 
         let _ = timeout(Duration::from_secs(60 * 30),
-            session.call(format!("docker run -it cargo-cult {} {} {}", username, cmd_name, author_name).as_str())
+            session.call(format!("docker run -it cargo-cult '{}' '{}' '{}'", username, cmd_name, author_name).as_str())
         ).await;
     }
 
