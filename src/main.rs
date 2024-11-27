@@ -52,6 +52,7 @@ async fn main() {
             println!("psst: all the other projects are installed here, so feel free to try them out.");
             Command::new("bash")
                 .env("PS1", format!("{}@cargo-cult:\\w\\$ ", username))
+                .arg("--noprofile").arg("--norc")
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())

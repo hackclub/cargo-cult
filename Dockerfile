@@ -25,6 +25,4 @@ RUN --mount=type=secret,id=AIRTABLE_KEY,env=AIRTABLE_KEY \
 RUN mkdir -p /gathering/.local/bin
 RUN ln -s /gathering/.cargo/bin/cargo-cult /gathering/.local/bin/readme
 
-RUN rm /gathering/.bashrc
-
 ENTRYPOINT ["cargo-cult", "ssh-entrypoint"]
