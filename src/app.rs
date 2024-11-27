@@ -183,7 +183,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
         let mut session = SSHForwardingSession::connect(
             "id_ed25519",
             "cargo-cult",
-            "localhost:22",
+            "localhost:2222",
             self.params.clone(),
             &mut self.input,
             &mut self.out

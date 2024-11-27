@@ -32,7 +32,7 @@ pub async fn ssh_server() {
     let config = Arc::new(config);
     let mut sh = Server::new();
 
-    sh.run_on_address(config, ("0.0.0.0", 2222)).await.unwrap();
+    sh.run_on_address(config, ("0.0.0.0", 22)).await.unwrap();
 }
 
 struct TerminalHandle {
