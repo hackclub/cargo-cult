@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::cmp::min;
 use tokio::sync::mpsc::{Receiver, unbounded_channel, UnboundedReceiver, UnboundedSender};
 use crossterm::style::{Color, Print, StyledContent, Stylize};
 use std::str;
