@@ -1,24 +1,28 @@
-use std::fmt::{Display, Formatter};
 use std::cmp::min;
-use tokio::sync::mpsc::{Receiver, unbounded_channel, UnboundedReceiver, UnboundedSender};
-use crossterm::style::{Color, Print, StyledContent, Stylize};
+use std::fmt::{Display, Formatter};
+use std::io::{ErrorKind, Write};
+use std::iter::Iterator;
+use std::marker::PhantomData;
 use std::str;
+use std::time::Duration;
+
 use crossterm::{ExecutableCommand, execute, queue, QueueableCommand};
 use crossterm::cursor::{MoveToColumn, MoveUp};
+use crossterm::style::{Color, Print, StyledContent, Stylize};
 use crossterm::style::Color::Reset;
-use std::io::{ErrorKind, Write};
-use std::marker::PhantomData;
-use std::time::Duration;
 use crossterm::terminal::{Clear, DisableLineWrap, EnableLineWrap, SetTitle};
 use crossterm::terminal::ClearType::{CurrentLine, FromCursorDown};
+use tokio::sync::mpsc::{Receiver, unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use crate::{SharedTerminalParams, TerminalCode};
-use crate::AsciiCode::{ArrowDown, ArrowUp, Backspace, Char, Enter, EoT};
-use crate::database::{FormData, SubmissionsAirtableBase};
+
 use MenuOptions::{Gallery, Submit};
+
+use crate::{SharedTerminalParams, TerminalCode};
 use crate::app::MenuOptions::Info;
 use crate::app::TerminalHandleMsg::{Data, Flush};
+use crate::AsciiCode::{ArrowDown, ArrowUp, Backspace, Char, Enter, EoT};
+use crate::database::{FormData, SubmissionsAirtableBase};
 use crate::ssh_client::SSHForwardingSession;
 
 enum TerminalHandleMsg {
@@ -27,8 +31,8 @@ enum TerminalHandleMsg {
 }
 
 struct AsyncWriter<Out: Write+Send+'static> {
-    sender: UnboundedSender<TerminalHandleMsg>,
-    _worker: JoinHandle<()>, // auto-exited when sender is dropped
+    sender: Option<UnboundedSender<TerminalHandleMsg>>,
+    worker: Option<JoinHandle<()>>, // auto-exited when sender is dropped
 
     _phantom_out: PhantomData<Out>
 }
@@ -37,8 +41,8 @@ impl<Out: Write+Send> AsyncWriter<Out> {
     fn new(out: Out) -> Self {
         let (send, recv) = unbounded_channel::<TerminalHandleMsg>();
         Self {
-            sender: send,
-            _worker: tokio::spawn(Self::worker(recv, out)),
+            sender: Some(send),
+            worker: Some(tokio::spawn(Self::worker(recv, out))),
 
             _phantom_out: PhantomData
         }
@@ -56,17 +60,23 @@ impl<Out: Write+Send> AsyncWriter<Out> {
             }
         }
     }
+
+    async fn wait(&mut self) {
+        let worker = self.worker.take().unwrap();
+        drop(self.sender.take());
+        worker.await.unwrap()
+    }
 }
 
 impl<Out: Write+Send> Write for AsyncWriter<Out> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.sender.send(Data(Vec::from(buf))).unwrap();
+        self.sender.as_mut().unwrap().send(Data(Vec::from(buf))).unwrap();
 
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.sender.send(Flush)
+        self.sender.as_mut().unwrap().send(Flush)
             .map_err(|_| std::io::Error::new(ErrorKind::Other, "Send Error"))
     }
 }
@@ -76,13 +86,13 @@ pub struct App<Out: Write+Send+'static, F> where F: FnOnce() {
     input: Receiver<TerminalCode>,
     params: SharedTerminalParams,
     
-    exit: Option<F> 
+    exit_fn_once: Option<F>
 }
 
 impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
     pub fn new(out: Out, input: Receiver<TerminalCode>, params: SharedTerminalParams, exit: F) -> Self {
         let writer = AsyncWriter::new(out);
-        Self {out: writer, input, params, exit: Some(exit)}
+        Self {out: writer, input, params, exit_fn_once: Some(exit)}
     }
 }
 
@@ -104,24 +114,35 @@ impl Display for MenuOptions {
 }
 
 impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
+    async fn exit(&mut self) -> ! {
+        self.out.wait().await;
+        self.exit_fn_once.take().unwrap()();
+        loop {
+            tokio::task::yield_now().await;
+        }
+    }
+
     fn flush(&mut self) -> std::io::Result<()> {
         self.out.flush()
     }
 
-    fn newline(&mut self) -> std::io::Result<()> {
-        write!(self.out, "\r\n")?;
+    fn print(&mut self, message: impl Display) -> std::io::Result<()> {
+        write!(self.out, "{}", message)?;
         self.flush()
     }
 
+    fn newline(&mut self) -> std::io::Result<()> {
+        self.print("\r\n")
+    }
+
     fn println(&mut self, message: impl Display) -> std::io::Result<()> {
-        write!(self.out, "{}", message)?;
-        self.newline()
+        self.print(format!("{}\r\n", message))
     }
 
     pub async fn menu(&mut self) -> std::io::Result<()> {
         self.out.execute(SetTitle("cargo cult"))?;
-        
-        self.newline()?;
+
+        self.slow_print(Self::ferris_ascii_art()).await?;
         self.println(Self::text_box("Welcome to the Cargo Cult!".white().bold(), Color::DarkRed, 1, 3, 2))?;
 
         let options = &[Info, Gallery, Submit];
@@ -129,25 +150,20 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
             match options[self.single_select(options).await?] {
                 Info => {
                     // TODO: formatting and copy pass
-                    self.println("\
-                    Rust is my favorite language- it's used in Firefox, Windows NT, and Discord, and known for \
-                    its safety features and efficiency.\r\nIt's also known for having a steep learning curve- let's \
-                    climb it together by building our own command-line apps!\r\n\r\n\
-                    We'll start with the Rust Book (doc.rust-lang.org/book) (chapters 1-12), \
-                    and if you publish your app to crates.io\r\nby New Year's, I'll \
-                    send you a physical copy of the book! If you already submitted a project during the \
-                    beta period,\r\nship a new feature to get new Orpheus x Ferris stickers designed by @acon!\r\n\r\n\
-                    Already know Rust? Take a look at some libraries to make more advanced apps - \
-                    Clap is great for argument parsing,\r\nCrossterm is great for manipulating \
-                    the terminal, and Ratatui is great for building out fully-featured TUIs.\r\n\r\n\
+                    self.print(Self::fixed_width("Hey, I'm Cheru! I'm a 17 y/o Hack Clubber working @ Hack Club HQ in Vermont. This month, I'm running Cargo Cult: a program to help you write your first Rust app! (Join us in #rust on the Hack Club Slack!) \r\n\r\n\
+                    Rust is my favorite language- it's used all over (Firefox, Discord, Windows kernel), and I love it for its low-level design and type system that forces you to write better code. It's also known for having a steep learning curve- let's climb it together by building our own command-line apps! \r\n\r\n\
+                    We'll start with the Rust Book (chapters 1-12), and if you publish your app to [crates.io](https://crates.io/) by New Year's, I'll send you a Rust book of your choice! Everyone who ships a project or an additional feature will get Orpheus x Ferris stickers designed by Acon! (You can submit even if you did the beta in November.) \r\n\r\n\
+                    Already know Rust? Take a look at some libraries to make more advanced apps - Clap is great for argument parsing, Crossterm is great for manipulating the terminal, and Ratatui is great for building out fully-featured TUIs. \r\n\r\n\
                     Here's the criteria to get a book: \r\n\
-                    - Your app must have a help page & readme\r\n\
-                    - Your app must be published to crates.io\r\n\
-                    - Your app must be runnable by me (in Linux/Docker)\r\n\
-                    - Your app must be useful OR entertaining\r\n\
-                    - Your app must be unique (no to-do lists!)\r\n\
-                    - You should push yourself! If you already know Rust, spend the time to make something really cool.\r\n\r\n\
-                    - Cheru (@cheru on Slack)")?;
+                    - Your app must have a help page & readme \r\n\
+                    - Your app must be published to crates.io \r\n\
+                    - Your app must be runnable by me (in Linux/Docker) \r\n\
+                    - Your app must be useful OR entertaining \r\n\
+                    - Your app must be unique (no to-do lists!) \r\n\
+                    - You should push yourself! If you already know Rust, spend the time to make something really cool. \r\n\r\n\
+                    Your choices for Rust books are \"The Rust Programming Language\" (2021) or \"Rust for Rustaceans\". Go forth and be hacky! \r\n\r\n\
+                    - Cheru (@cheru on Slack)".to_string(), min(self.params.clone().lock().await.col_width as usize, 100))
+                    )?;
                 },
                 Gallery => return self.gallery().await,
                 Submit => return self.submission_form().await
@@ -160,10 +176,12 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
     pub async fn gallery(&mut self) -> std::io::Result<()> {
         // TODO: error handling?
         let responses = SubmissionsAirtableBase::new().get().await.expect("getting submissions to wrok");
-
-        let result  = self.single_select(
+        
+        let width =  min(self.params.clone().lock().await.col_width as usize, 100);
+        
+        let result = self.single_select(
             responses.iter().map(
-                |resp| format!("{}\r\n{}\r\n", resp.package_name.clone().unwrap(), resp.description)
+                |resp| Self::fixed_width(format!("{}\r\n{}", resp.package_name.clone().unwrap(), resp.description), width)
             ).collect::<Vec<String>>().as_slice()
         ).await?;
         let result = responses.get(result).expect("result value to exist");
@@ -178,7 +196,6 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
     }
 
     async fn docker_session(&mut self, cmd_name: &str, author_name: &str) {
-
         let mut session = SSHForwardingSession::connect(
             "id_ed25519",
             "cargo-cult",
@@ -187,16 +204,20 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
             &mut self.input,
             &mut self.out
         ).await.unwrap();
-        
+
         let username = self.params.lock().await.username.clone();
 
         let _ = timeout(Duration::from_secs(60 * 30),
-            session.call(format!("docker run -it cargo-cult '{}' '{}' '{}'", username, cmd_name, author_name).as_str())
+                        session.call(format!("docker run -it cargo-cult '{}' '{}' '{}'", username, cmd_name, author_name).as_str())
         ).await;
     }
 
     async fn submission_form(&mut self) -> std::io::Result<()> {
         let mut data = FormData::new();
+
+        self.println("Are you submitting a new project or an update?".bold())?;
+        let options = &["Submission", "Update"];
+        data.submission_type = options[self.single_select(options).await?].into();
 
         self.println("  First thing's first... what's your name?".bold())?;
         data.name = self.prompt("Fiona Hackworth", true).await?;
@@ -231,13 +252,13 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
         data.hours = self.prompt("3 hours, plus 5 hours learning Rust", true).await?;
         self.newline()?;
 
-        self.println("   Wahoo! Thanks for submitting. ".white().bold().on_dark_blue())?;
-        self.newline()?;
-
         let mut airtable = SubmissionsAirtableBase::new();
         airtable.create(data).await.expect("uploading to airtable to work");
 
-        Ok(())
+        self.println("   Wahoo! Thanks for submitting. ".white().bold().on_dark_blue())?;
+        self.newline()?;
+
+        self.exit().await
     }
 
     async fn prompt(&mut self, default_text: &str, required: bool) -> std::io::Result<String> {
@@ -275,7 +296,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
                                 input.push_str(text);
                             }
                         }
-                        EoT => self.exit.take().unwrap()(),
+                        EoT => self.exit().await,
                         _ => {}
                     }
                 }
@@ -290,12 +311,11 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
     }
 
     async fn single_select<T: Clone + Display>(&mut self, options: &[T]) -> Result<usize, std::io::Error> {
-
         let total_lines: usize = {
             let lines = options.iter().map(|option|
                 option.to_string().split("\r\n").count()).sum::<usize>();
 
-            lines + 1 
+            lines + 1
         };
 
         let box_rows = {
@@ -303,33 +323,33 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
 
             min(total_lines, terminal_height as usize)
         };
-        
+
         let mut scroll_pos = 0;
 
         let mut index = 0;
-        
+
         // this lambda is extremely cursed but it works. i don't know how or why
         let mut render = |index: usize, first_time: bool| -> std::io::Result<()> {
             self.out.execute(DisableLineWrap)?;
-            
+
             let mut buffer = String::new();
             for (i, option) in options.iter().enumerate() {
                 let element = format!("{}{}\r\n",
-                                     "> ".bold(),
-                                     if index == i {
-                                         option.to_string().bold()
-                                     } else { option.to_string().reset() }, 
+                                      "> ".bold(),
+                                      if index == i {
+                                          option.to_string().bold()
+                                      } else { option.to_string().reset() },
                 );
                 buffer.push_str(element.as_str());
                 let element_lines = element.split("\r\n").count();
 
                 if index == i {
                     let lines = buffer.split("\r\n").count();
-                   if lines.saturating_sub(scroll_pos) > box_rows {
-                       scroll_pos += lines - scroll_pos - box_rows - 1;
-                   } else if lines - element_lines < scroll_pos {
-                       scroll_pos = lines - element_lines; 
-                   }
+                    if lines.saturating_sub(scroll_pos) > box_rows {
+                        scroll_pos += lines - scroll_pos - box_rows - 1;
+                    } else if lines - element_lines < scroll_pos {
+                        scroll_pos = lines - element_lines;
+                    }
                 }
             }
 
@@ -368,7 +388,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
                         if index < options.len() - 1 { index += 1 }
                     }
                     EoT => {
-                        self.exit.take().unwrap()()
+                        self.exit().await;
                     }
                     _ => {}
                 }
@@ -419,5 +439,38 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
         result.push_str(&top_bottom_lines());
 
         result
+    }
+
+    async fn slow_print(&mut self, input: String) -> std::io::Result<()> {
+        for line in input.split("\r\n") {
+            self.println(line)?;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Ok(())
+    }
+
+    fn ferris_ascii_art() -> String {
+        include_str!("include/ferris_ascii_art.txt").split("\n").map(|x| x.to_owned() + "\r\n").collect()
+    }
+    
+    fn fixed_width(input: String, width: usize) -> String {
+        input.split("\r\n").map(
+            |line| {
+                let mut result: Vec<String> = vec![String::new()]; 
+                
+                let mut line_num = 0;
+                
+                for word in line.split(' ') {
+                    if result[line_num].len() + word.len() > width {
+                        line_num += 1;
+                        result.push(String::new())
+                    }
+                    result[line_num].push_str(&*(word.to_owned() + " "))
+                }
+                
+                result.iter().map(|x| x.to_owned() + "\r\n").collect::<String>()
+            } 
+        ).collect()
     }
 }

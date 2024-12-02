@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FormData {
+    #[serde(rename = "Type")]
+    pub submission_type: String, // Submission | Update
+    
     #[serde(rename = "Name")]
     pub name: String,
     #[serde(rename = "Slack Handle")]
@@ -34,12 +37,14 @@ pub struct FormData {
     pub hours: String,
 
     #[serde(rename = "Package Name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub package_name: Option<String>
 }
 
 impl FormData {
     pub fn new() -> Self {
         Self {
+            submission_type: "Submission".to_string(),
             name: "".to_string(),
             slack_handle: "".to_string(),
             email: "".to_string(),
@@ -110,16 +115,14 @@ impl SubmissionsAirtableBase {
         Ok(records.iter().map(|record| record.fields.clone()).collect())
     }
 
-    pub async fn create(&mut self, data: FormData) -> Result<Vec<FormData>, anyhow::Error>{
-
-        let AirtableRecordsData { records } = self.client
+    pub async fn create(&mut self, data: FormData) -> reqwest::Result<()> {
+        self.client
             .post(format!("{AIRTABLE_BASE_URL}/{}/{}", self.base_id, self.table_name))
             .header("Authorization", format!("Bearer {}", self.airtable_key))
             .header("Content-Type", "application/json")
             .json(&AirtableRecordsData {records: vec![Record {
                 id: String::new(), fields: data, created_time: None
-            }] }).send().await?.json().await?;
-
-        Ok(records.iter().map(|record| record.fields.clone()).collect())
+            }] }).send().await?;
+        Ok(())
     }
 }
