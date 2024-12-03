@@ -33,10 +33,6 @@ async fn main() {
         Action::Ssh => {
             ssh_server().await
         }
-        Action::Gallery => {
-            let mut app = make_terminal_app().await;
-            app.gallery().await.unwrap();
-        }
         Action::InstallAllPackages => {
             let mut airtable = SubmissionsAirtableBase::new();
             let packages: Vec<String> = airtable.get().await.unwrap().iter().map(|entry| entry.package_name.clone().unwrap()).collect();
@@ -76,7 +72,7 @@ async fn main() {
         }
         _ => {
             let mut app = make_terminal_app().await;
-            app.menu().await.unwrap();
+            app.run().await.unwrap();
         }
     }
 }

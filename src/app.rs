@@ -62,9 +62,10 @@ impl<Out: Write+Send> AsyncWriter<Out> {
     }
 
     async fn wait(&mut self) {
-        let worker = self.worker.take().unwrap();
-        drop(self.sender.take());
-        worker.await.unwrap()
+        if let Some(worker) = self.worker.take() {
+            drop(self.sender.take());
+            worker.await.unwrap() 
+        }
     }
 }
 
@@ -114,9 +115,16 @@ impl Display for MenuOptions {
 }
 
 impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
+    pub async fn run(&mut self) -> std::io::Result<()> {
+        self.menu().await?;
+        self.exit().await;
+    }
+    
     async fn exit(&mut self) -> ! {
         self.out.wait().await;
-        self.exit_fn_once.take().unwrap()();
+        if let Some(exit) = self.exit_fn_once.take() {
+            exit()
+        }
         loop {
             tokio::task::yield_now().await;
         }
@@ -139,7 +147,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
         self.print(format!("{}\r\n", message))
     }
 
-    pub async fn menu(&mut self) -> std::io::Result<()> {
+    async fn menu(&mut self) -> std::io::Result<()> {
         self.out.execute(SetTitle("cargo cult"))?;
 
         self.slow_print(Self::ferris_ascii_art()).await?;
@@ -176,9 +184,9 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
     pub async fn gallery(&mut self) -> std::io::Result<()> {
         // TODO: error handling?
         let responses = SubmissionsAirtableBase::new().get().await.expect("getting submissions to wrok");
-        
+
         let width =  min(self.params.clone().lock().await.col_width as usize, 100);
-        
+
         let result = self.single_select(
             responses.iter().map(
                 |resp| Self::fixed_width(format!("{}\r\n{}", resp.package_name.clone().unwrap(), resp.description), width)
@@ -257,8 +265,8 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
 
         self.println("   Wahoo! Thanks for submitting. ".white().bold().on_dark_blue())?;
         self.newline()?;
-
-        self.exit().await
+        
+        Ok(())
     }
 
     async fn prompt(&mut self, default_text: &str, required: bool) -> std::io::Result<String> {
@@ -453,14 +461,14 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
     fn ferris_ascii_art() -> String {
         include_str!("include/ferris_ascii_art.txt").split("\n").map(|x| x.to_owned() + "\r\n").collect()
     }
-    
+
     fn fixed_width(input: String, width: usize) -> String {
         input.split("\r\n").map(
             |line| {
-                let mut result: Vec<String> = vec![String::new()]; 
-                
+                let mut result: Vec<String> = vec![String::new()];
+
                 let mut line_num = 0;
-                
+
                 for word in line.split(' ') {
                     if result[line_num].len() + word.len() > width {
                         line_num += 1;
@@ -468,9 +476,9 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
                     }
                     result[line_num].push_str(&*(word.to_owned() + " "))
                 }
-                
+
                 result.iter().map(|x| x.to_owned() + "\r\n").collect::<String>()
-            } 
+            }
         ).collect()
     }
 }

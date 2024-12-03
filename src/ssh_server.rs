@@ -166,7 +166,7 @@ impl server::Handler for Server {
 
         let handle = session.handle();
         let mut app = App::new(terminal_handle, rx, terminal_params.clone(), move || {
-            block_on(async move {
+            tokio::spawn(async move {
                 handle.eof(channel).await.unwrap();
                 handle.close(channel).await.unwrap();
             });
@@ -175,7 +175,7 @@ impl server::Handler for Server {
         self.sender = Some(tx);
         
         self.handle = Some(tokio::spawn(async move {
-                               app.menu().await.unwrap();
+                               app.run().await.unwrap();
                            }));
         
         self.params = Some(terminal_params.clone());
