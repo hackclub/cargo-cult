@@ -160,7 +160,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
                     // TODO: formatting and copy pass
                     self.print(Self::fixed_width("Hey, I'm Cheru! I'm a 17 y/o Hack Clubber working @ Hack Club HQ in Vermont. This month, I'm running Cargo Cult: a program to help you write your first Rust app! (Join us in #rust on the Hack Club Slack!) \r\n\r\n\
                     Rust is my favorite language- it's used all over (Firefox, Discord, Windows kernel), and I love it for its low-level design and type system that forces you to write better code. It's also known for having a steep learning curve- let's climb it together by building our own command-line apps! \r\n\r\n\
-                    We'll start with the Rust Book (chapters 1-12), and if you publish your app to crates.io by New Year's, I'll send you a Rust book of your choice! Also, everyone who ships a project or an additional feature will get Orpheus x Ferris stickers designed by Acon! (You can submit even if you did the beta in November.) \r\n\r\n\
+                    We'll start with the Rust Book (chapters 1-12), and if you publish your app to crates.io by New Year's, I'll send you a Rust book of your choice (\"The Rust Programming Language\" or \"Rust for Rustaceans\")! Also, everyone who ships a project or an additional feature will get Orpheus x Ferris stickers designed by Acon! (You can submit even if you did the beta in November.) \r\n\r\n\
                     Already know Rust? Take a look at some libraries to make more advanced apps - Clap is great for argument parsing, Crossterm is great for manipulating the terminal, and Ratatui is great for building out fully-featured TUIs. \r\n\r\n\
                     Here's the criteria to get a book: \r\n\
                     - Your app must have a help page & readme \r\n\
@@ -169,7 +169,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
                     - Your app must be useful OR entertaining \r\n\
                     - Your app must be unique (no to-do lists!) \r\n\
                     - You should push yourself! If you already know Rust, spend the time to make something really cool. \r\n\r\n\
-                    Your choices for Rust books are \"The Rust Programming Language\" (2021) or \"Rust for Rustaceans\". Go forth and be hacky! \r\n\r\n\
+                     Go forth and be hacky! \r\n\r\n\
                     - Cheru (@cheru on Slack)".to_string(), min(self.params.clone().lock().await.col_width as usize, 100))
                     )?;
                 },
