@@ -4,6 +4,7 @@ use std::io::{ErrorKind, Write};
 use std::iter::Iterator;
 use std::marker::PhantomData;
 use std::str;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossterm::{ExecutableCommand, execute, queue, QueueableCommand};
@@ -13,7 +14,7 @@ use crossterm::style::Color::Reset;
 use crossterm::terminal::{Clear, DisableLineWrap, EnableLineWrap, SetTitle};
 use crossterm::terminal::ClearType::{CurrentLine, FromCursorDown};
 use tokio::sync::mpsc::{Receiver, unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, spawn_blocking};
 use tokio::time::timeout;
 
 use MenuOptions::{Gallery, Submit};
@@ -48,16 +49,19 @@ impl<Out: Write+Send> AsyncWriter<Out> {
         }
     }
 
-    async fn worker(mut recv: UnboundedReceiver<TerminalHandleMsg>, mut out: Out) {
+    async fn worker(mut recv: UnboundedReceiver<TerminalHandleMsg>, out: Out) {
+        let shared_out  = Arc::new(Mutex::new(out));
         while let Some(msg) = recv.recv().await {
+            let out = shared_out.clone();
+            spawn_blocking(move ||
             match msg {
                 Data(c) => {
-                    let _ = out.write(c.as_slice()).unwrap();
+                    let _ = out.lock().unwrap().write(c.as_slice()).unwrap();
                 }
                 Flush => {
-                    out.flush().unwrap();
+                    out.lock().unwrap().flush().unwrap();
                 }
-            }
+            }).await.unwrap();
         }
     }
 
