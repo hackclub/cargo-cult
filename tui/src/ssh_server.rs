@@ -184,8 +184,8 @@ impl server::Handler for Server {
             self.handle = Some(tokio::spawn(async move {
                 let _ = tokio::spawn(async move {
                     let username = terminal_params.clone().lock().await.username.clone();
-                    if username.starts_with("cc-") {
-                        app.run_project(username.split_once("cc-").unwrap().1.to_string()).await.unwrap();
+                    if username.starts_with("[") && username.ends_with("]") {
+                        app.run_project(username[1..username.len() - 1].to_string()).await.unwrap();
                     } else {
                         app.run().await.unwrap();
                     }
