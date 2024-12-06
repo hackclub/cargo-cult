@@ -213,7 +213,7 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
 
         self.docker_session(&result.package_name.clone().unwrap(), &result.name).await; 
         
-        Ok(())
+        self.exit().await;
     }
 
     async fn docker_session(&mut self, cmd_name: &str, author_name: &str) {
