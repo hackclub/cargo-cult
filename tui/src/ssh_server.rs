@@ -165,25 +165,35 @@ impl server::Handler for Server {
         let (tx, rx) = mpsc::channel(1);
 
         let handle = session.handle();
-        let mut app = App::new(terminal_handle, rx, terminal_params.clone(), move || {
-            tokio::spawn(async move {
-                handle.eof(channel).await.unwrap();
-                handle.close(channel).await.unwrap();
-            });
-        });
+
+        let mut app = {
+            let handle = handle.clone();
+            App::new(terminal_handle, rx, terminal_params.clone(), move || {
+                tokio::spawn(async move {
+                    handle.eof(channel).await.unwrap();
+                    handle.close(channel).await.unwrap();
+                });
+            })
+        };
         
         self.sender = Some(tx);
 
         {
             let terminal_params = terminal_params.clone();
+            let handle = handle.clone();
             self.handle = Some(tokio::spawn(async move {
-                let username = terminal_params.clone().lock().await.username.clone();
-                if username.starts_with("cc-") {
-                    app.run_project(username.split_once("cc-").unwrap().1.to_string()).await.unwrap();
-                } else {
-                    app.run().await.unwrap();
-                }
-            })); 
+                let _ = tokio::spawn(async move {
+                    let username = terminal_params.clone().lock().await.username.clone();
+                    if username.starts_with("cc-") {
+                        app.run_project(username.split_once("cc-").unwrap().1.to_string()).await.unwrap();
+                    } else {
+                        app.run().await.unwrap();
+                    }
+                }).await;
+                
+                handle.eof(channel).await.unwrap();
+                handle.close(channel).await.unwrap();
+            }));
         }
 
         self.params = Some(terminal_params.clone());
