@@ -11,7 +11,7 @@ use russh::Error::SendError;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Sender};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle};
 use crate::{SharedTerminalParams, TerminalCode, TerminalParams};
 use crate::app::App;
 use crate::terminal::channel_data_to_terminal_codes;
@@ -72,7 +72,7 @@ impl Write for TerminalHandle {
 
 struct Server {
     sender: Option<Sender<TerminalCode>>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<AbortHandle>,
     params: Option<SharedTerminalParams>,
     
     username: Option<String>
@@ -181,19 +181,24 @@ impl server::Handler for Server {
         {
             let terminal_params = terminal_params.clone();
             let handle = handle.clone();
-            self.handle = Some(tokio::spawn(async move {
-                let _ = tokio::spawn(async move {
-                    let username = terminal_params.clone().lock().await.username.clone();
-                    if username.starts_with("[") && username.ends_with("]") {
-                        app.run_project(username[1..username.len() - 1].to_string()).await.unwrap();
-                    } else {
-                        app.run().await.unwrap();
-                    }
-                }).await;
-                
-                handle.eof(channel).await.unwrap();
-                handle.close(channel).await.unwrap();
-            }));
+            
+            let task = tokio::spawn(async move {
+                let username = terminal_params.clone().lock().await.username.clone();
+                if username.starts_with("[") && username.ends_with("]") {
+                    app.run_project(username[1..username.len() - 1].to_string()).await.unwrap();
+                } else {
+                    app.run().await.unwrap();
+                }
+            });
+
+            self.handle = Some(task.abort_handle());
+
+            tokio::spawn(async move {
+                let _ = task.await;
+
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
         }
 
         self.params = Some(terminal_params.clone());
