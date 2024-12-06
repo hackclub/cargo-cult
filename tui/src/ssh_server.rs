@@ -173,11 +173,19 @@ impl server::Handler for Server {
         });
         
         self.sender = Some(tx);
-        
-        self.handle = Some(tokio::spawn(async move {
-                               app.run().await.unwrap();
-                           }));
-        
+
+        {
+            let terminal_params = terminal_params.clone();
+            self.handle = Some(tokio::spawn(async move {
+                let username = terminal_params.clone().lock().await.username.clone();
+                if username.starts_with("cc-") {
+                    app.run_project(username.split("cc-").collect()).await.unwrap();
+                } else {
+                    app.run().await.unwrap();
+                }
+            })); 
+        }
+
         self.params = Some(terminal_params.clone());
 
         Ok(())

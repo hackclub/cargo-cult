@@ -206,6 +206,15 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
 
         Ok(())
     }
+    
+    pub async fn run_project(&mut self, name: String) -> std::io::Result<()> {
+        let responses = SubmissionsAirtableBase::new().get().await.expect("getting submissions to wrok");
+        let result = responses.iter().find(|x| x.package_name.clone().unwrap() == name).unwrap();
+
+        self.docker_session(&result.package_name.clone().unwrap(), &result.name).await; 
+        
+        Ok(())
+    }
 
     async fn docker_session(&mut self, cmd_name: &str, author_name: &str) {
         let mut session = SSHForwardingSession::connect(
