@@ -209,7 +209,10 @@ impl<Out: Write+Send, F> App<Out, F> where F: FnOnce() {
     
     pub async fn run_project(&mut self, name: String) -> std::io::Result<()> {
         let responses = SubmissionsAirtableBase::new().get().await.expect("getting submissions to wrok");
-        let result = responses.iter().find(|x| x.package_name.clone().unwrap() == name).unwrap();
+        let Some(result) = responses.iter().find(|x| x.package_name.clone().unwrap() == name) else {
+            self.println("The project could not be found: ".to_owned() + &*name)?;
+            self.exit().await;
+        };
 
         self.docker_session(&result.package_name.clone().unwrap(), &result.name).await; 
         
